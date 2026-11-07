@@ -62,6 +62,18 @@ func itemKeys(items []*gofeed.Item) map[string]struct{} {
 	return keys
 }
 
+// itemTime returns the item's publish time, falling back to its update time;
+// nil when the feed provides neither (or the item is nil)
+func itemTime(item *gofeed.Item) *time.Time {
+	if item == nil {
+		return nil
+	}
+	if item.PublishedParsed != nil {
+		return item.PublishedParsed
+	}
+	return item.UpdatedParsed
+}
+
 type PubDateJob struct {
 	RSSJob
 	lastPubDate     *time.Time
@@ -135,11 +147,12 @@ func (j *PubDateJob) Init(ctx context.Context) error {
 		return err
 	}
 
-	if len(feed.Items) == 0 {
-		return nil
+	for _, item := range feed.Items {
+		if t := itemTime(item); t != nil {
+			*j.lastPubDate = *t
+			break
+		}
 	}
-
-	*j.lastPubDate = *feed.Items[0].PublishedParsed
 	return nil
 }
 
@@ -157,18 +170,29 @@ func (j *PubDateJob) RetrieveAndSendNewItems(ctx context.Context) error {
 	j.sender.InitQueue(len(feed.Items))
 
 	now := time.Now()
-	currentTopPubDate := *feed.Items[0].PublishedParsed
+	currentTopPubDate := *j.lastPubDate
+	for _, item := range feed.Items {
+		if t := itemTime(item); t != nil {
+			currentTopPubDate = *t
+			break
+		}
+	}
 	if !j.sendFutureItems && currentTopPubDate.After(now) {
 		currentTopPubDate = now
 	}
 
 	for idx, item := range feed.Items {
+		pubDate := itemTime(item)
+		if pubDate == nil {
+			j.logger.Debug("Skip item without date", "item", item, "idx", idx)
+			continue
+		}
 		// assumption: items are sorted by pubdate
-		if item.PublishedParsed.Before(*j.lastPubDate) {
+		if pubDate.Before(*j.lastPubDate) {
 			j.logger.Debug("Break", "item", item, "lastPubDate", *j.lastPubDate, "idx", idx)
 			break
 		}
-		if !j.sendFutureItems && item.PublishedParsed.After(now) {
+		if !j.sendFutureItems && pubDate.After(now) {
 			j.logger.Debug("Continue", "item", item, "lastPubDate", *j.lastPubDate, "idx", idx)
 			continue
 		}

@@ -18,10 +18,8 @@ type RSSItem struct {
 func RSSItemFromGoFeedItem(item *gofeed.Item) *RSSItem {
 	// Not every feed item carries a parseable date; never deref nil
 	var pubDate time.Time
-	if item.PublishedParsed != nil {
-		pubDate = *item.PublishedParsed
-	} else if item.UpdatedParsed != nil {
-		pubDate = *item.UpdatedParsed
+	if t := itemTime(item); t != nil {
+		pubDate = *t
 	}
 
 	return &RSSItem{
