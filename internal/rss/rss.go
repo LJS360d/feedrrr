@@ -187,8 +187,8 @@ func (j *PubDateJob) RetrieveAndSendNewItems(ctx context.Context) error {
 			j.logger.Debug("Skip item without date", "item", item, "idx", idx)
 			continue
 		}
-		// assumption: items are sorted by pubdate
-		if pubDate.Before(*j.lastPubDate) {
+		// assumption: items are sorted by pubdate; lastPubDate itself was already sent
+		if !pubDate.After(*j.lastPubDate) {
 			j.logger.Debug("Break", "item", item, "lastPubDate", *j.lastPubDate, "idx", idx)
 			break
 		}

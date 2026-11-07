@@ -73,3 +73,37 @@ func TestPubDateJobUndatedItems(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPubDateJobDoesNotResendSeenItems(t *testing.T) {
+	recent := time.Now().Add(-time.Hour).UTC().Format(time.RFC1123Z)
+	newer := time.Now().Add(-time.Minute).UTC().Format(time.RFC1123Z)
+	feed := rssDoc(`<item><title>a</title><guid>a</guid><pubDate>` + recent + `</pubDate></item>`)
+	u := serveFeed(t, func() string { return feed })
+
+	sender := &recordingSender{}
+	job := NewPubDateJob(*slog.Default(), *u, "", false, 5*time.Second, sender)
+
+	ctx := context.Background()
+	if err := job.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := job.RetrieveAndSendNewItems(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(sender.sent) != 0 {
+		t.Fatalf("unchanged feed sent %v, want nothing", sender.sent)
+	}
+
+	feed = rssDoc(`<item><title>b</title><guid>b</guid><pubDate>` + newer + `</pubDate></item>` +
+		`<item><title>a</title><guid>a</guid><pubDate>` + recent + `</pubDate></item>`)
+	for range 2 {
+		if err := job.RetrieveAndSendNewItems(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(sender.sent) != 1 || sender.sent[0] != "b" {
+		t.Fatalf("sent %v, want [b]", sender.sent)
+	}
+}
