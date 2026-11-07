@@ -12,6 +12,7 @@ import (
 type (
 	ChangeDetectionMode int
 	SenderMode          int
+	TemplateEngine      int
 )
 
 const (
@@ -25,6 +26,14 @@ const (
 )
 
 const (
+	// TemplateEngineHTML escapes output for HTML contexts (safe for sinks that render HTML)
+	TemplateEngineHTML TemplateEngine = iota
+	// TemplateEngineText renders verbatim (for plain-text/markdown sinks like Discord)
+	TemplateEngineText
+)
+
+const (
+	DefaultTemplateEngine             = TemplateEngineHTML
 	DefaultChangeDetectionMode        = ChangeModeGUID
 	DefaultSenderMode                 = SenderModeInstant
 	DefaultFetchTimeout               = 60 * time.Second
@@ -46,6 +55,11 @@ var senderModeMap = map[string]SenderMode{
 	"batched": SenderModeBatched,
 }
 
+var templateEngineMap = map[string]TemplateEngine{
+	"html": TemplateEngineHTML,
+	"text": TemplateEngineText,
+}
+
 type FeedrrrConfig struct {
 	Jobs  map[string]JobConfig `mapstructure:"jobs"`
 	Sinks map[string][]string  `mapstructure:"sinks"`
@@ -59,6 +73,7 @@ type JobConfig struct {
 	ChangeMode         ChangeDetectionMode `mapstructure:"change_mode"`
 	SenderMode         SenderMode          `mapstructure:"sender_mode"`
 	MessageTemplate    string              `mapstructure:"msg_template"`
+	TemplateEngine     TemplateEngine      `mapstructure:"template_engine"`
 	SendFutureArticles bool                `mapstructure:"future_articles"`
 	FetchTimeout       time.Duration       `mapstructure:"fetch_timeout"`
 }
@@ -99,6 +114,27 @@ func (t *SenderMode) UnmarshalMapstructure(input any) error {
 
 	if !ok {
 		return fmt.Errorf("Invalid value for sender mode: %s", str)
+	}
+
+	*t = mappedVal
+	return nil
+}
+
+func (t *TemplateEngine) UnmarshalMapstructure(input any) error {
+	str, ok := input.(string)
+	if !ok {
+		return fmt.Errorf("expected string, got %T", input)
+	}
+
+	if str == "" {
+		*t = DefaultTemplateEngine
+		return nil
+	}
+
+	mappedVal, ok := templateEngineMap[strings.TrimSpace(str)]
+
+	if !ok {
+		return fmt.Errorf("Invalid value for template engine: %s", str)
 	}
 
 	*t = mappedVal

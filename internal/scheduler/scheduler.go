@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	htmltemplate "html/template"
 	"log/slog"
 	"net"
 	"net/url"
 	"strings"
-	"html/template"
+	"text/template"
 
 	"dev.kaesebrot.eu/go/feedrrr/internal/config"
 	"dev.kaesebrot.eu/go/feedrrr/internal/rss"
@@ -46,12 +47,14 @@ func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, job
 			templateStr = config.DefaultMessageTemplate
 		}
 
-		tmpl, err := template.New("rss_message").Funcs(
-			template.FuncMap{
-				"html2text": html2text.HTML2Text,
-			},
-		).Parse(templateStr)
-
+		funcs := map[string]any{"html2text": html2text.HTML2Text}
+		var tmpl rss.Template
+		switch cfg.TemplateEngine {
+		case config.TemplateEngineText:
+			tmpl, err = template.New("rss_message").Funcs(funcs).Parse(templateStr)
+		default:
+			tmpl, err = htmltemplate.New("rss_message").Funcs(funcs).Parse(templateStr)
+		}
 		if err != nil {
 			return nil, err
 		}

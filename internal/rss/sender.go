@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
-	"html/template"
 
 	"github.com/nicholas-fedor/shoutrrr/pkg/router"
 	"github.com/nicholas-fedor/shoutrrr/pkg/types"
@@ -17,13 +17,18 @@ type MessageSender interface {
 	Flush() error
 }
 
+// Template renders an item; satisfied by both text/template and html/template.
+type Template interface {
+	Execute(wr io.Writer, data any) error
+}
+
 type queuedItem struct {
 	title string
 	msg   string
 }
 
 type BaseMessageSender struct {
-	tmpl         *template.Template
+	tmpl         Template
 	router       *router.ServiceRouter
 	params       *types.Params
 	messageDeque []queuedItem
@@ -37,13 +42,13 @@ type InstantSender struct {
 	BaseMessageSender
 }
 
-func NewBatchedSender(router *router.ServiceRouter, tmpl *template.Template) MessageSender {
-	slog.Debug("Initialized new batched sender", "router", *router, "tmpl", *tmpl)
+func NewBatchedSender(router *router.ServiceRouter, tmpl Template) MessageSender {
+	slog.Debug("Initialized new batched sender", "router", *router)
 	return &BatchedSender{BaseMessageSender{router: router, tmpl: tmpl, params: &types.Params{}, messageDeque: make([]queuedItem, 0)}}
 }
 
-func NewInstantSender(router *router.ServiceRouter, tmpl *template.Template) MessageSender {
-	slog.Debug("Initialized new instant sender", "router", *router, "tmpl", *tmpl)
+func NewInstantSender(router *router.ServiceRouter, tmpl Template) MessageSender {
+	slog.Debug("Initialized new instant sender", "router", *router)
 	return &InstantSender{BaseMessageSender{router: router, tmpl: tmpl, params: &types.Params{}, messageDeque: make([]queuedItem, 0)}}
 }
 

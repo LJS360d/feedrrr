@@ -107,6 +107,15 @@ jobs:
     # a timeout on the initial fetch is retried on schedule
     fetch_timeout: 60s
 
+    # Template engine for msg_template (optional, default: html)
+    # can be either "html" or "text"
+    # html: html/template, values are HTML-escaped; use for sinks that render HTML
+    #       (e.g. telegram with parsemode=HTML, smtp with usehtml=yes)
+    # text: text/template, values are rendered verbatim; use for plain-text/markdown
+    #       sinks (e.g. discord, ntfy, gotify), where HTML escaping shows up as &amp; etc.
+    #       the builtin {{html .Title}} function can still escape individual values
+    template_engine: html
+
     # Item message template (optional, default: see /internal/confg/config.go:DefaultMessageTemplate)
     # can be a multiline YAML string
     # Available properties:
@@ -132,7 +141,7 @@ jobs:
 
 The `schedule` field accepts standard 5-field cron expressions (`minute hour dom month dow`) as well as 6-field expressions with seconds (`second minute hour dom month dow`). Timezone-aware schedules are supported via a `TZ=` or `CRON_TZ=` prefix (e.g. `TZ=Europe/Berlin 0 9 * * *`).
 
-For the full reference on the templating engine, please see [html/template](https://pkg.go.dev/html/template).
+For the full reference on the templating engine, please see [html/template](https://pkg.go.dev/html/template) (`template_engine: html`, the default) or [text/template](https://pkg.go.dev/text/template) (`template_engine: text`).
 The default message template is:
 ```go
 {{.Title}} ({{.PubDate}})
