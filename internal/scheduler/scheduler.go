@@ -2,11 +2,9 @@ package scheduler
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	htmltemplate "html/template"
 	"log/slog"
-	"net"
 	"net/url"
 	"strings"
 	"text/template"
@@ -83,16 +81,11 @@ func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, job
 			rssJob = rss.NewPubDateJob(*logger, *url, prefix, cfg.SendFutureArticles, fetchTimeout, sender)
 		}
 
-		// A feed that is unreachable at startup must not take the whole daemon down
-		// the job seeds its state on the first successful fetch instead
-		err = rssJob.Init(ctx)
-		if err != nil {
-			var netErr net.Error
-			isTimeout := errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())
-			if !isTimeout {
-				return nil, fmt.Errorf("initial fetch for job %q failed: %w", name, err)
-			}
-			logger.Warn("Initial fetch timed out, will retry on schedule", "err", err)
+		// A feed that fails at startup (timeout, 4xx/5xx, bad XML, DNS...) must not
+		// take the whole daemon down: the job seeds its state on the first
+		// successful scheduled fetch instead
+		if err := rssJob.Init(ctx); err != nil {
+			logger.Warn("Initial fetch failed, will retry on schedule", "err", err)
 		}
 
 		// format: * * * * *   -> without seconds (5 elements)

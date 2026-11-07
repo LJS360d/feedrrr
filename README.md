@@ -104,7 +104,7 @@ jobs:
     sender_mode: instant
 
     # HTTP timeout for fetching the feed (optional, default: 60s)
-    # a timeout on the initial fetch is retried on schedule
+    # a failed initial fetch (timeout, HTTP error, bad XML...) is retried on schedule
     fetch_timeout: 60s
 
     # Template engine for msg_template (optional, default: html)
