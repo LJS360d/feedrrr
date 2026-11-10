@@ -9,7 +9,6 @@ import (
 	"dev.kaesebrot.eu/go/feedrrr/internal/utility"
 	"github.com/nicholas-fedor/shoutrrr"
 	"github.com/nicholas-fedor/shoutrrr/pkg/router"
-	"github.com/nicholas-fedor/shoutrrr/pkg/types"
 )
 
 const maxRecursionDepth = 10
@@ -83,9 +82,4 @@ func flattenSinkAliasRecursively(sinkAliases *map[string][]string, name string, 
 	slog.Default().Debug("Resolved sink alias", "alias", name, "urls", results)
 
 	return results, nil
-}
-
-func SendToSink(sinkMap *map[string]*router.ServiceRouter, sink string, message string, params *types.Params) error {
-	(*sinkMap)[sink].Send(message, params)
-	return nil
 }

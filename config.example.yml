@@ -30,6 +30,18 @@ jobs:
 
       {{.Link}}
 
+  gallery:
+    source: https://example.com/gallery.rss
+    schedule: "*/30 * * * *"
+    sinks:
+      - discord-art
+    template_engine: text
+    require_image: true
+    msg_template: |
+      {{.Link}}
+      {{ range .Images }}{{ embed . }}{{ end }}
+
 sinks:
+  discord-art: discord://token@webhookid
   telegram: telegram://bottoken?chats=chatid
   email: smtp://user:password@smtp.example.com:587/?from=alerts@example.com&to=me@example.com

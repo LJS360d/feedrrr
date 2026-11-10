@@ -2,19 +2,22 @@ package rss
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
+	"strings"
 
-	"github.com/nicholas-fedor/shoutrrr/pkg/router"
 	"github.com/nicholas-fedor/shoutrrr/pkg/types"
 )
 
 type MessageSender interface {
-	InitQueue(cap int)
+	// Enqueue renders an item and queues it for the next Flush
 	Enqueue(title string, item RSSItem) error
-	Flush() error
+	// Flush sends and empties the queue, returning the items not delivered
+	Flush() (failed []RSSItem, err error)
 }
 
 // Template renders an item; satisfied by both text/template and html/template.
@@ -22,16 +25,25 @@ type Template interface {
 	Execute(wr io.Writer, data any) error
 }
 
+// Router is the part of shoutrrr's *router.ServiceRouter the senders use
+type Router interface {
+	Send(message string, params *types.Params) []error
+	SendItems(items []types.MessageItem, params types.Params) []error
+}
+
 type queuedItem struct {
-	title string
-	msg   string
+	item   RSSItem
+	title  string
+	msg    string
+	images []string
 }
 
 type BaseMessageSender struct {
-	tmpl         Template
-	router       *router.ServiceRouter
-	params       *types.Params
-	messageDeque []queuedItem
+	tmpl   Template
+	embeds *EmbedCollector
+	router Router
+	params *types.Params
+	queue  []queuedItem
 }
 
 type BatchedSender struct {
@@ -40,24 +52,40 @@ type BatchedSender struct {
 
 type InstantSender struct {
 	BaseMessageSender
+	// uploader, if set, attaches embed images as files instead of linking them
+	uploader *ImageUploader
 }
 
-func NewBatchedSender(router *router.ServiceRouter, tmpl Template) MessageSender {
-	slog.Debug("Initialized new batched sender", "router", *router)
-	return &BatchedSender{BaseMessageSender{router: router, tmpl: tmpl, params: &types.Params{}, messageDeque: make([]queuedItem, 0)}}
+// NewBatchedSender joins all items of a run into one plain-text message
+func NewBatchedSender(router Router, tmpl Template, embeds *EmbedCollector) MessageSender {
+	slog.Debug("Initialized new batched sender")
+	return &BatchedSender{BaseMessageSender{router: router, tmpl: tmpl, embeds: embeds, params: &types.Params{}}}
 }
 
-func NewInstantSender(router *router.ServiceRouter, tmpl Template) MessageSender {
-	slog.Debug("Initialized new instant sender", "router", *router)
-	return &InstantSender{BaseMessageSender{router: router, tmpl: tmpl, params: &types.Params{}, messageDeque: make([]queuedItem, 0)}}
+// NewInstantSender sends every item on its own, with embed images attached.
+// uploader, if set, attaches them as files
+func NewInstantSender(router Router, tmpl Template, embeds *EmbedCollector, uploader *ImageUploader) MessageSender {
+	slog.Debug("Initialized new instant sender", "upload", uploader != nil)
+	return &InstantSender{BaseMessageSender{router: router, tmpl: tmpl, embeds: embeds, params: &types.Params{}}, uploader}
 }
 
-func (b *BaseMessageSender) InitQueue(cap int) {
-	q := make([]queuedItem, 0, cap)
-	b.messageDeque = q
+// imageItems lays out an item with images, attaching them when uploading
+func (s *InstantSender) imageItems(msg string, images []string) []types.MessageItem {
+	if s.uploader == nil {
+		return embedItems(msg, images)
+	}
+	urls, files := s.uploader.prepare(context.Background(), images)
+	if len(urls) == 0 {
+		return []types.MessageItem{{Text: msg}}
+	}
+	items := embedItems(msg, urls)
+	for i := range items {
+		items[i].File = files[i]
+	}
+	return items
 }
 
-func (b *BaseMessageSender) RenderWithTemplate(item RSSItem) (string, error) {
+func (b *BaseMessageSender) render(item RSSItem) (string, error) {
 	var msgBytes bytes.Buffer
 	err := b.tmpl.Execute(&msgBytes, item)
 	if err != nil {
@@ -68,66 +96,87 @@ func (b *BaseMessageSender) RenderWithTemplate(item RSSItem) (string, error) {
 }
 
 func (b *BaseMessageSender) Enqueue(title string, item RSSItem) error {
-	msg, err := b.RenderWithTemplate(item)
+	b.embeds.reset()
+	msg, err := b.render(item)
 	if err != nil {
 		return err
 	}
 
-	qItem := queuedItem{title: title, msg: msg}
-
-	b.messageDeque = append(b.messageDeque, qItem)
-	slog.Debug("Enqueue item", "messages", b.messageDeque, "item", qItem)
+	b.queue = append(b.queue, queuedItem{item: item, title: title, msg: msg, images: b.embeds.take()})
 	return nil
 }
 
-// implement deque-like pop right method
-func (b *BaseMessageSender) popRight() (queuedItem, bool) {
-	if len(b.messageDeque) == 0 {
-		return queuedItem{}, false
-	}
-
-	element := b.messageDeque[len(b.messageDeque)-1]
-	b.messageDeque = b.messageDeque[:len(b.messageDeque)-1]
-	return element, true
+// drain empties the queue and returns its items oldest first
+func (b *BaseMessageSender) drain() []queuedItem {
+	items := b.queue
+	b.queue = nil
+	slices.Reverse(items)
+	return items
 }
 
-func (s *BatchedSender) Flush() error {
-	defer s.router.Flush(s.params)
+// Flush sends every queued item as one message; on error all count as failed
+func (s *BatchedSender) Flush() ([]RSSItem, error) {
+	queued := s.drain()
+	if len(queued) == 0 {
+		return nil, nil
+	}
 
-	slog.Debug("Flush", "messages", s.messageDeque)
+	msgs := make([]string, len(queued))
+	for i, item := range queued {
+		msgs[i] = item.msg
+	}
 
-	for {
-		item, ok := s.popRight()
-		if !ok {
-			break
+	var sendErrs []error
+	sendPacer.do(func() {
+		sendErrs = s.router.Send(strings.Join(msgs, "\n"), s.params)
+	})
+	if err := errors.Join(sendErrs...); err != nil {
+		failed := make([]RSSItem, len(queued))
+		for i, item := range queued {
+			failed[i] = item.item
 		}
-		s.router.Enqueue(item.msg)
+		return failed, fmt.Errorf("Error sending batch of %d items: %w", len(queued), err)
 	}
 
-	return nil
+	return nil, nil
 }
 
-func (s *InstantSender) Flush() error {
-	errs := make([]error, 0, len(s.messageDeque))
-
+func (s *InstantSender) Flush() ([]RSSItem, error) {
+	var errs []error
+	var failed []RSSItem
 	succ := 0
-	slog.Debug("Flush", "messages", s.messageDeque)
 
-	for {
-		item, ok := s.popRight()
-		if !ok {
-			break
-		}
+	for _, item := range s.drain() {
 		s.params.SetTitle(item.title)
 
+		var items []types.MessageItem
+		if len(item.images) > 0 {
+			// downloads happen outside the pacer so they don't hold up other jobs
+			items = s.imageItems(item.msg, item.images)
+		}
+
+		var sendErrs []error
+		sendPacer.do(func() {
+			if len(items) > 0 {
+				sendErrs = s.router.SendItems(items, *s.params)
+			} else {
+				sendErrs = s.router.Send(item.msg, s.params)
+			}
+		})
+
 		routerErrs := []error{}
-		for _, err := range s.router.Send(item.msg, s.params) {
+		for _, err := range sendErrs {
 			if err != nil {
 				routerErrs = append(routerErrs, err)
 			}
 		}
 		if len(routerErrs) > 0 {
-			errs = append(errs, fmt.Errorf("Error processing item: '%s': %w", item.title, errors.Join(routerErrs...)))
+			name := item.title
+			if name == "" {
+				name = item.item.key()
+			}
+			errs = append(errs, fmt.Errorf("Error processing item: '%s': %w", name, errors.Join(routerErrs...)))
+			failed = append(failed, item.item)
 			continue
 		}
 
@@ -137,8 +186,8 @@ func (s *InstantSender) Flush() error {
 	slog.Debug("Done flushing", "success", succ, "errs", len(errs))
 
 	if len(errs) > 0 {
-		return fmt.Errorf("Errors encountered while sending: %w", errors.Join(errs...))
+		return failed, fmt.Errorf("Errors encountered while sending: %w", errors.Join(errs...))
 	}
 
-	return nil
+	return nil, nil
 }

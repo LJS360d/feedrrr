@@ -6,6 +6,7 @@ import (
 	htmltemplate "html/template"
 	"log/slog"
 	"net/url"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -45,7 +46,24 @@ func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, job
 			templateStr = config.DefaultMessageTemplate
 		}
 
-		funcs := map[string]any{"html2text": html2text.HTML2Text}
+		var rewrites []rss.ImageRewrite
+		for i, r := range cfg.ImageRewrites {
+			re, err := regexp.Compile(r.Match)
+			if err != nil {
+				return nil, fmt.Errorf("job %s: image_rewrites[%d]: %w", name, i, err)
+			}
+			if r.Fallback && !cfg.UploadImages {
+				slog.Warn("fallback image rewrite has no effect without upload_images", "job", name, "rule", i)
+			}
+			rewrites = append(rewrites, rss.ImageRewrite{Match: re, Replace: r.Replace, Fallback: r.Fallback})
+		}
+
+		// batched messages are plain text, so embed renders the URL there
+		embeds := rss.NewEmbedCollector(cfg.SenderMode == config.SenderModeBatched)
+		funcs := map[string]any{
+			"html2text": html2text.HTML2Text,
+			"embed":     embeds.Embed,
+		}
 		var tmpl rss.Template
 		switch cfg.TemplateEngine {
 		case config.TemplateEngineText:
@@ -62,9 +80,16 @@ func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, job
 		var sender rss.MessageSender
 		switch cfg.SenderMode {
 		case config.SenderModeInstant:
-			sender = rss.NewInstantSender(router, tmpl)
+			var uploader *rss.ImageUploader
+			if cfg.UploadImages {
+				uploader = rss.NewImageUploader(cfg.ImageReferer, config.DefaultFetchTimeout, rewrites)
+			}
+			sender = rss.NewInstantSender(router, tmpl, embeds, uploader)
 		case config.SenderModeBatched:
-			sender = rss.NewBatchedSender(router, tmpl)
+			if cfg.UploadImages {
+				logger.Warn("upload_images has no effect in batched sender mode")
+			}
+			sender = rss.NewBatchedSender(router, tmpl, embeds)
 		}
 
 		fetchTimeout := cfg.FetchTimeout
@@ -73,12 +98,21 @@ func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, job
 			fetchTimeout = config.DefaultFetchTimeout
 		}
 
+		opts := rss.JobOptions{
+			TitlePrefix:   prefix,
+			RequireImage:  cfg.RequireImage,
+			HideTitle:     cfg.HideTitle,
+			FetchTimeout:  fetchTimeout,
+			Backfill:      cfg.Backfill,
+			ImageRewrites: rewrites,
+		}
+
 		var rssJob rss.FeedPoller
 		switch cfg.ChangeMode {
 		case config.ChangeModeGUID:
-			rssJob = rss.NewGUIDJob(*logger, *url, prefix, fetchTimeout, sender)
+			rssJob = rss.NewGUIDJob(*logger, *url, opts, sender)
 		case config.ChangeModePubDate:
-			rssJob = rss.NewPubDateJob(*logger, *url, prefix, cfg.SendFutureArticles, fetchTimeout, sender)
+			rssJob = rss.NewPubDateJob(*logger, *url, opts, cfg.SendFutureArticles, sender)
 		}
 
 		// A feed that fails at startup (timeout, 4xx/5xx, bad XML, DNS...) must not
@@ -103,6 +137,9 @@ func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, job
 			}),
 			gocron.WithName(name),
 			gocron.WithContext(ctx),
+			// skip a run while the previous one is still sending, else both
+			// see the same items as new and send them twice
+			gocron.WithSingletonMode(gocron.LimitModeReschedule),
 			gocron.WithEventListeners(
 				gocron.BeforeJobRuns(func(jobID uuid.UUID, jobName string) {
 					slog.Debug("Running job", "jobID", jobID, "jobName", jobName)

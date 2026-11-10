@@ -76,6 +76,20 @@ type JobConfig struct {
 	TemplateEngine     TemplateEngine      `mapstructure:"template_engine"`
 	SendFutureArticles bool                `mapstructure:"future_articles"`
 	FetchTimeout       time.Duration       `mapstructure:"fetch_timeout"`
+	RequireImage       bool                `mapstructure:"require_image"` // skip items without images
+	HideTitle          bool                `mapstructure:"hide_title"`    // send items without a title
+	Backfill           int                 `mapstructure:"backfill"`      // send the newest N items on the first run
+	UploadImages       bool                `mapstructure:"upload_images"` // attach embed images as files
+	ImageReferer       string              `mapstructure:"image_referer"` // Referer sent when downloading them
+	ImageRewrites      []ImageRewrite      `mapstructure:"image_rewrites"`
+}
+
+// ImageRewrite rewrites image URLs matching a regular expression
+type ImageRewrite struct {
+	Match   string `mapstructure:"match"`   // Go regexp
+	Replace string `mapstructure:"replace"` // $1, ${name} refer to groups
+	// Fallback rules only apply when an image can't be attached (upload_images)
+	Fallback bool `mapstructure:"fallback"`
 }
 
 func (t *ChangeDetectionMode) UnmarshalMapstructure(input any) error {

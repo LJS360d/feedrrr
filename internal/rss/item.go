@@ -13,6 +13,8 @@ type RSSItem struct {
 	Description string
 	GUID        string
 	Link        string
+	Images      []string
+	Image       string
 }
 
 func RSSItemFromGoFeedItem(item *gofeed.Item) *RSSItem {
@@ -22,6 +24,12 @@ func RSSItemFromGoFeedItem(item *gofeed.Item) *RSSItem {
 		pubDate = *t
 	}
 
+	images := itemImages(item)
+	var image string
+	if len(images) > 0 {
+		image = images[0]
+	}
+
 	return &RSSItem{
 		Title:       item.Title,
 		PubDate:     pubDate,
@@ -29,5 +37,7 @@ func RSSItemFromGoFeedItem(item *gofeed.Item) *RSSItem {
 		Description: item.Description,
 		GUID:        item.GUID,
 		Link:        item.Link,
+		Images:      images,
+		Image:       image,
 	}
 }

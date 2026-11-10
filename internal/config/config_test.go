@@ -46,3 +46,38 @@ sinks:
 		}
 	}
 }
+
+func TestParseConfigRequireImage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	yml := `jobs:
+  art:
+    source: https://example.com/a.xml
+    schedule: "* * * * *"
+    sinks: [s]
+    require_image: true
+    hide_title: true
+  news:
+    source: https://example.com/b.xml
+    schedule: "* * * * *"
+    sinks: [s]
+sinks:
+  s: logger://
+`
+	if err := os.WriteFile(path, []byte(yml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := ParseConfig("feedrrr", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Jobs["art"].RequireImage {
+		t.Error("art: require_image not set")
+	}
+	if !c.Jobs["art"].HideTitle {
+		t.Error("art: hide_title not set")
+	}
+	if c.Jobs["news"].RequireImage || c.Jobs["news"].HideTitle {
+		t.Error("news: require_image should default to false")
+	}
+}

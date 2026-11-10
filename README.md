@@ -6,6 +6,7 @@ feedrrr is an RSS feed polling daemon that periodically checks configured RSS fe
 - crontab-based syntax for jobs
 - multiple notification sinks and aliases using [Shoutrrr](https://github.com/nicholas-fedor/shoutrrr). See its [documentation page](https://shoutrrr.nickfedor.com/latest/services/overview/) for supported services.
 - plaintext or source (usually HTML) formatting in delivery
+- image extraction from feed items, sent as image embeds (see [Image feeds](#image-feeds))
 
 ## Installation
 
@@ -94,7 +95,7 @@ jobs:
     # Change detection mode (optional, default: guid)
     # can be either "guid" or "pubdate"
     # pubdate: articles published (specifically, the pubdate value) between last cronjob run and current cron job run will be detected as new
-    # guid: articles that have appeared after an article with the guid seen during last cronjob run will be detected as new
+    # guid: articles whose guid (or link, or title) hasn't been in the feed during the last 7 days will be detected as new
     change_mode: guid
 
     # Message sender mode (optional, default: instant)
@@ -106,6 +107,34 @@ jobs:
     # HTTP timeout for fetching the feed (optional, default: 60s)
     # a failed initial fetch (timeout, HTTP error, bad XML...) is retried on schedule
     fetch_timeout: 60s
+
+    # Skip items that have no image (optional, default: false)
+    require_image: false
+
+    # Send the newest N items of the feed on the first run (optional, default: 0)
+    # applies on every restart, since seen state isn't persisted
+    backfill: 0
+
+    # Attach images passed to `embed` as files instead of linking them
+    # (optional, default: false, instant sender mode only)
+    # for image hosts the sink can't load itself. Up to 10 MB per message, shared
+    # between images; an image over its share is retried with the fallback
+    # image_rewrites, and left out if it still doesn't fit
+    upload_images: false
+
+    # Referer header sent when downloading images for upload_images (optional)
+    image_referer: ""
+
+    # Rewrite image URLs (optional), applied in order, e.g. to pick a smaller size
+    # match is a Go regexp, replace can refer to its groups ($1, ${name})
+    # fallback: true rules only apply with upload_images, when an image can't be attached
+    image_rewrites:
+      - match: '^(https://img\.example\.com)/original/(.+)\.\w+$'
+        replace: '$1/large/$2.jpg'
+        fallback: false
+
+    # Send only the rendered msg_template, without a title (optional, default: false)
+    hide_title: false
 
     # Template engine for msg_template (optional, default: html)
     # can be either "html" or "text"
@@ -126,9 +155,12 @@ jobs:
     # 	Description string
     # 	GUID        string
     # 	Link        string
+    # 	Images      []string // image URLs found in the item, see "Image feeds"
+    # 	Image       string   // first entry of Images, or empty
     #
     # Available functions:
     #   html2text(html string) string // generates plaintext from html
+    #   embed(url string) string      // attaches an image as an embed, see "Image feeds"
     #
     msg_template: |
       Item with a custom feed message appeared:
@@ -160,7 +192,40 @@ type RSSItem struct {
 	Description string
 	GUID        string
 	Link        string
+	Images      []string
+	Image       string
 }
+```
+
+##### Image feeds
+
+Every item's image URLs are extracted into `.Images` (deduplicated, best first) and `.Image` (the first one, or empty), from the first of these that yields any:
+
+1. `<media:content>` (also inside `<media:group>`) and image `<enclosure>`s
+2. `<img>` tags in the content, then the description
+3. `<media:thumbnail>`
+
+Tracking pixels (declared 1px wide or high) and non-http(s) URLs are dropped, relative URLs are resolved against the item link.
+
+Call `embed` in the template to send an image as an embed instead of text (at most 4 per item, empty URLs ignored). Sinks with embed support (e.g. Discord) get the title and text on the first embed, one image each; others get only the text. With `sender_mode: batched`, `embed` writes the URL inline instead.
+
+Example, skipping posts without images:
+
+```yaml
+jobs:
+  gallery:
+    source: https://example.com/gallery.rss
+    schedule: "*/30 * * * *"
+    sinks:
+      - discord-art
+    template_engine: text
+    require_image: true
+    msg_template: |
+      {{.Link}}
+      {{ range .Images }}{{ embed . }}{{ end }}
+
+sinks:
+  discord-art: discord://token@webhookid
 ```
 
 ##### Sinks

@@ -2,7 +2,6 @@ package rss
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -22,13 +21,70 @@ type RSSJob struct {
 	titlePrefix string
 	sender      MessageSender
 	fp          *gofeed.Parser
+	// requireImage skips items without any image; they still count as seen
+	requireImage bool
+	// hideTitle sends items without a title
+	hideTitle bool
+	// imageRewrites are applied to every item's image URLs
+	imageRewrites []ImageRewrite
+	// backfill is how many of the newest items the first run sends
+	backfill int
 }
 
-// GUIDJob remembers every item key seen in the previous fetch, so items that
-// get removed or reordered in the feed neither flood the sink nor get skipped
+func (j *RSSJob) fetch(ctx context.Context) (*gofeed.Feed, error) {
+	feed, err := j.fp.ParseURLWithContext(j.feedURL.String(), ctx)
+	if err != nil {
+		return nil, err
+	}
+	j.logger.Debug("Got feed", "amount", len(feed.Items))
+	return feed, nil
+}
+
+// send delivers items and returns the keys of those not delivered (all of
+// them on a render error)
+func (j *RSSJob) send(items []*gofeed.Item) (failed map[string]bool, err error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+
+	for idx, item := range items {
+		rssItem := RSSItemFromGoFeedItem(item)
+		rssItem.Images = rewriteImages(j.imageRewrites, rssItem.Images)
+		if len(rssItem.Images) > 0 {
+			rssItem.Image = rssItem.Images[0]
+		}
+		if j.requireImage && len(rssItem.Images) == 0 {
+			j.logger.Debug("Skip item without image", "item", item, "idx", idx)
+			continue
+		}
+
+		title := ""
+		if !j.hideTitle {
+			title = j.titlePrefix + item.Title
+		}
+		j.logger.Debug("New item", "item", item, "idx", idx)
+		if err := j.sender.Enqueue(title, *rssItem); err != nil {
+			failed := make(map[string]bool, len(items))
+			for _, item := range items {
+				failed[itemKey(item)] = true
+			}
+			return failed, err
+		}
+	}
+
+	failedItems, err := j.sender.Flush()
+	return itemKeys(failedItems), err
+}
+
+// seenRetention is how long an item key is remembered after it was last in
+// the feed, so items that drop out and come back aren't resent
+const seenRetention = 7 * 24 * time.Hour
+
+// GUIDJob sends items whose key wasn't seen within seenRetention
 type GUIDJob struct {
 	RSSJob
-	seen map[string]struct{}
+	seen map[string]time.Time // item key -> last time it was in the feed
+	now  func() time.Time
 }
 
 func newFeedParser(fetchTimeout time.Duration) *gofeed.Parser {
@@ -42,24 +98,50 @@ func itemKey(item *gofeed.Item) string {
 	if item == nil {
 		return ""
 	}
-	if item.GUID != "" {
-		return item.GUID
-	}
-	if item.Link != "" {
-		return item.Link
-	}
-	return item.Title
+	return keyOf(item.GUID, item.Link, item.Title)
 }
 
-func itemKeys(items []*gofeed.Item) map[string]struct{} {
-	keys := make(map[string]struct{}, len(items))
+func keyOf(guid, link, title string) string {
+	if guid != "" {
+		return guid
+	}
+	if link != "" {
+		return link
+	}
+	return title
+}
+
+// key matches itemKey of the source feed item
+func (i RSSItem) key() string {
+	return keyOf(i.GUID, i.Link, i.Title)
+}
+
+func itemKeys(items []RSSItem) map[string]bool {
+	keys := make(map[string]bool, len(items))
 	for _, item := range items {
-		if item == nil {
-			continue
-		}
-		keys[itemKey(item)] = struct{}{}
+		keys[item.key()] = true
 	}
 	return keys
+}
+
+// markSeen records every item in the feed as seen now, except those in skip,
+// and forgets keys that have been absent for longer than seenRetention
+func (j *GUIDJob) markSeen(items []*gofeed.Item, skip map[string]bool) {
+	now := j.now()
+	if j.seen == nil {
+		j.seen = make(map[string]time.Time, len(items))
+	}
+	for _, item := range items {
+		if item == nil || skip[itemKey(item)] {
+			continue
+		}
+		j.seen[itemKey(item)] = now
+	}
+	for key, last := range j.seen {
+		if now.Sub(last) > seenRetention {
+			delete(j.seen, key)
+		}
+	}
 }
 
 // itemTime returns the item's publish time, falling back to its update time;
@@ -78,96 +160,111 @@ type PubDateJob struct {
 	RSSJob
 	lastPubDate     *time.Time
 	sendFutureItems bool
+	// delivered holds keys sent by a partly failed run, so retrying it
+	// doesn't resend them
+	delivered map[string]bool
 }
 
 func (j *GUIDJob) Init(ctx context.Context) error {
-	feed, err := j.fp.ParseURLWithContext(j.feedURL.String(), ctx)
+	feed, err := j.fetch(ctx)
 	if err != nil {
 		return err
 	}
 
-	j.seen = itemKeys(feed.Items)
+	j.seed(feed.Items)
 	j.logger.Debug("Init", "seen", len(j.seen))
 	return nil
 }
 
+// seed records the initial feed as seen, except the first backfill items
+// (feeds list newest first), which the next run then sends
+func (j *GUIDJob) seed(items []*gofeed.Item) {
+	skip := make(map[string]bool, j.backfill)
+	for _, item := range items {
+		if len(skip) >= j.backfill {
+			break
+		}
+		if item != nil {
+			skip[itemKey(item)] = true
+		}
+	}
+	j.markSeen(items, skip)
+}
+
 func (j *GUIDJob) RetrieveAndSendNewItems(ctx context.Context) error {
-	feed, err := j.fp.ParseURLWithContext(j.feedURL.String(), ctx)
+	feed, err := j.fetch(ctx)
 	if err != nil {
 		return err
 	}
 
-	j.logger.Debug("Got feed", "amount", len(feed.Items))
-
-	current := itemKeys(feed.Items)
-
 	// special case: the initial fetch failed, so seed state without sending
 	if j.seen == nil {
-		j.seen = current
-		j.logger.Info("Seeded state on first successful fetch", "items", len(current))
+		j.seed(feed.Items)
+		j.logger.Info("Seeded state on first successful fetch", "items", len(j.seen))
 		return nil
 	}
 
-	if len(feed.Items) == 0 {
-		return nil
-	}
-	j.sender.InitQueue(len(feed.Items))
-
-	for idx, item := range feed.Items {
+	var items []*gofeed.Item
+	for _, item := range feed.Items {
 		if item == nil {
-			j.logger.Debug("Recieved nil item", "idx", idx)
 			continue
 		}
-		if _, ok := j.seen[itemKey(item)]; ok {
-			continue
-		}
-
-		j.logger.Debug("New item", "item", item, "idx", idx)
-		err := j.sender.Enqueue(fmt.Sprintf("%s%s", j.titlePrefix, item.Title), *RSSItemFromGoFeedItem(item))
-		if err != nil {
-			return err
+		if _, ok := j.seen[itemKey(item)]; !ok {
+			items = append(items, item)
 		}
 	}
 
-	err = j.sender.Flush()
+	// items that failed to send stay unseen so the next run retries just them
+	failed, err := j.send(items)
+	j.markSeen(feed.Items, failed)
 	if err != nil {
 		return err
 	}
 
 	j.logger.Debug("Successful iteration")
-	j.seen = current
 	return nil
 }
 
 func (j *PubDateJob) Init(ctx context.Context) error {
 	defer j.logger.Debug("Init", "lastPubDate", *j.lastPubDate)
 
-	feed, err := j.fp.ParseURLWithContext(j.feedURL.String(), ctx)
+	feed, err := j.fetch(ctx)
 	if err != nil {
 		return err
 	}
 
+	// cut at the newest dated item, or backfill dated items below it
+	var cut *time.Time
+	remaining := j.backfill
 	for _, item := range feed.Items {
-		if t := itemTime(item); t != nil {
-			*j.lastPubDate = *t
+		t := itemTime(item)
+		if t == nil {
+			continue
+		}
+		if remaining == 0 {
+			cut = t
 			break
 		}
+		remaining--
 	}
+	switch {
+	case cut != nil:
+		*j.lastPubDate = *cut
+	case j.backfill > 0:
+		*j.lastPubDate = time.Time{}
+	}
+	// no dated items and no backfill: keep the creation time as the cut
 	return nil
 }
 
 func (j *PubDateJob) RetrieveAndSendNewItems(ctx context.Context) error {
-	feed, err := j.fp.ParseURLWithContext(j.feedURL.String(), ctx)
+	feed, err := j.fetch(ctx)
 	if err != nil {
 		return err
 	}
-
-	j.logger.Debug("Got feed", "amount", len(feed.Items))
-
 	if len(feed.Items) == 0 {
 		return nil
 	}
-	j.sender.InitQueue(len(feed.Items))
 
 	now := time.Now()
 	currentTopPubDate := *j.lastPubDate
@@ -181,6 +278,7 @@ func (j *PubDateJob) RetrieveAndSendNewItems(ctx context.Context) error {
 		currentTopPubDate = now
 	}
 
+	var items []*gofeed.Item
 	for idx, item := range feed.Items {
 		pubDate := itemTime(item)
 		if pubDate == nil {
@@ -196,51 +294,79 @@ func (j *PubDateJob) RetrieveAndSendNewItems(ctx context.Context) error {
 			j.logger.Debug("Continue", "item", item, "lastPubDate", *j.lastPubDate, "idx", idx)
 			continue
 		}
-
-		j.logger.Debug("New item", "item", item, "idx", idx)
-
-		err := j.sender.Enqueue(fmt.Sprintf("%s%s", j.titlePrefix, item.Title), *RSSItemFromGoFeedItem(item))
-		if err != nil {
-			return err
+		if j.delivered[itemKey(item)] {
+			j.logger.Debug("Skip item delivered by a failed run", "item", item, "idx", idx)
+			continue
 		}
+
+		items = append(items, item)
 	}
 
-	err = j.sender.Flush()
+	failed, err := j.send(items)
 	if err != nil {
+		for _, item := range items {
+			if key := itemKey(item); !failed[key] {
+				if j.delivered == nil {
+					j.delivered = make(map[string]bool)
+				}
+				j.delivered[key] = true
+			}
+		}
 		return err
 	}
 
 	j.logger.Debug("Successful iteration")
 	*j.lastPubDate = currentTopPubDate
+	j.delivered = nil
 	return nil
 }
 
-func NewGUIDJob(logger slog.Logger, url url.URL, titlePrefix string, fetchTimeout time.Duration, sender MessageSender) FeedPoller {
-	logger.Debug("Creating new GUID job")
-	return &GUIDJob{
-		RSSJob{
-			logger:      logger.With("feedURL", url.String(), "type", "guid"),
-			feedURL:     &url,
-			titlePrefix: titlePrefix,
-			sender:      sender,
-			fp:          newFeedParser(fetchTimeout),
-		},
-		nil,
+// JobOptions are the settings shared by every kind of job
+type JobOptions struct {
+	// TitlePrefix is prepended to every item title
+	TitlePrefix string
+	// RequireImage skips items without any image
+	RequireImage bool
+	// HideTitle sends items without a title, leaving just the rendered template
+	HideTitle bool
+	// FetchTimeout bounds each feed fetch
+	FetchTimeout time.Duration
+	// ImageRewrites rewrite item image URLs
+	ImageRewrites []ImageRewrite
+	// Backfill sends this many of the newest items on the first run
+	Backfill int
+}
+
+func newRSSJob(logger slog.Logger, url url.URL, kind string, opts JobOptions, sender MessageSender) RSSJob {
+	return RSSJob{
+		logger:        logger.With("feedURL", url.String(), "type", kind),
+		feedURL:       &url,
+		titlePrefix:   opts.TitlePrefix,
+		sender:        sender,
+		fp:            newFeedParser(opts.FetchTimeout),
+		requireImage:  opts.RequireImage,
+		hideTitle:     opts.HideTitle,
+		backfill:      max(opts.Backfill, 0),
+		imageRewrites: opts.ImageRewrites,
 	}
 }
 
-func NewPubDateJob(logger slog.Logger, url url.URL, titlePrefix string, sendFutureItems bool, fetchTimeout time.Duration, sender MessageSender) FeedPoller {
+func NewGUIDJob(logger slog.Logger, url url.URL, opts JobOptions, sender MessageSender) FeedPoller {
+	logger.Debug("Creating new GUID job")
+	return &GUIDJob{
+		newRSSJob(logger, url, "guid", opts, sender),
+		nil,
+		time.Now,
+	}
+}
+
+func NewPubDateJob(logger slog.Logger, url url.URL, opts JobOptions, sendFutureItems bool, sender MessageSender) FeedPoller {
 	lastPubDate := time.Now()
 	logger.Debug("Creating new PubDate job")
 	return &PubDateJob{
-		RSSJob{
-			logger:      logger.With("feedURL", url.String(), "type", "pubdate"),
-			feedURL:     &url,
-			titlePrefix: titlePrefix,
-			sender:      sender,
-			fp:          newFeedParser(fetchTimeout),
-		},
+		newRSSJob(logger, url, "pubdate", opts, sender),
 		&lastPubDate,
 		sendFutureItems,
+		nil,
 	}
 }
