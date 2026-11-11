@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestParseConfigTemplateEngine(t *testing.T) {
@@ -79,5 +80,29 @@ sinks:
 	}
 	if c.Jobs["news"].RequireImage || c.Jobs["news"].HideTitle {
 		t.Error("news: require_image should default to false")
+	}
+}
+
+func TestParseConfigSendGap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	yml := `send_gap: 2s
+jobs:
+  a:
+    source: https://example.com/a.xml
+    schedule: "* * * * *"
+    sinks: [s]
+sinks:
+  s: logger://
+`
+	if err := os.WriteFile(path, []byte(yml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := ParseConfig("feedrrr", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SendGap != 2*time.Second {
+		t.Errorf("send_gap = %v, want 2s", c.SendGap)
 	}
 }

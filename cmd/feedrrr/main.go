@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"dev.kaesebrot.eu/go/feedrrr/internal/config"
+	"dev.kaesebrot.eu/go/feedrrr/internal/rss"
 	"dev.kaesebrot.eu/go/feedrrr/internal/scheduler"
 	"dev.kaesebrot.eu/go/feedrrr/internal/sinks"
 	"dev.kaesebrot.eu/go/feedrrr/internal/utility"
@@ -78,6 +79,8 @@ func main() {
 	if err != nil {
 		utility.HandleErr("Error setting up sinks", err)
 	}
+
+	rss.SetSendGap(c.SendGap)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

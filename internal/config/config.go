@@ -61,8 +61,9 @@ var templateEngineMap = map[string]TemplateEngine{
 }
 
 type FeedrrrConfig struct {
-	Jobs  map[string]JobConfig `mapstructure:"jobs"`
-	Sinks map[string][]string  `mapstructure:"sinks"`
+	Jobs    map[string]JobConfig `mapstructure:"jobs"`
+	Sinks   map[string][]string  `mapstructure:"sinks"`
+	SendGap time.Duration        `mapstructure:"send_gap"`
 }
 
 type JobConfig struct {

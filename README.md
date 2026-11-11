@@ -72,6 +72,13 @@ All configuration keys can be overridden via environment variables prefixed with
 | `--loglevel` | `-l` | Log level |
 
 #### YAML config
+
+```yaml
+# Minimum time between two messages, across all jobs (optional, default: 1s)
+# sends are serialized; the gap is counted from the end of the previous send.
+send_gap: 500ms
+```
+
 ##### Jobs
 
 Each job defines an RSS feed to poll and where to send notifications.
