@@ -11,7 +11,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"text/template"
+	"time"
 
 	"dev.kaesebrot.eu/go/feedrrr/internal/config"
 	"dev.kaesebrot.eu/go/feedrrr/internal/rss"
@@ -21,13 +24,18 @@ import (
 	"github.com/nicholas-fedor/shoutrrr/pkg/router"
 )
 
-func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, jobSinks *map[string]*router.ServiceRouter, jobURLs map[string][]string) (gocron.Scheduler, error) {
-	s, err := gocron.NewScheduler()
+func SetupJobs(ctx context.Context, c *config.FeedrrrConfig, jobSinks *map[string]*router.ServiceRouter, jobURLs map[string][]string) (gocron.Scheduler, error) {
+	var opts []gocron.SchedulerOption
+	if c.MaxConcurrentJobs > 0 {
+		opts = append(opts, gocron.WithLimitConcurrentJobs(c.MaxConcurrentJobs, gocron.LimitModeWait))
+	}
+	s, err := gocron.NewScheduler(opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	for name, cfg := range *jobConfigs {
+	var inits []func() bool
+	for name, cfg := range c.Jobs {
 		router, exists := (*jobSinks)[name]
 
 		if !exists {
@@ -115,12 +123,22 @@ func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, job
 			rssJob = rss.NewPubDateJob(*logger, *url, opts, cfg.SendFutureArticles, sender)
 		}
 
-		// A feed that fails at startup (timeout, 4xx/5xx, bad XML, DNS...) must not
-		// take the whole daemon down: the job seeds its state on the first
-		// successful scheduled fetch instead
-		if err := rssJob.Init(ctx); err != nil {
-			logger.Warn("Initial fetch failed, will retry on schedule", "err", err)
-		}
+		// closed once the job has state to work from; runs before that are
+		// skipped so they can't race the initial fetch
+		ready := make(chan struct{})
+		inits = append(inits, func() bool {
+			defer close(ready)
+			// A feed that fails at startup (timeout, 4xx/5xx, bad XML, DNS...) must not
+			// take the whole daemon down: the job seeds its state on the first
+			// successful scheduled fetch instead
+			start := time.Now()
+			if err := rssJob.Init(ctx); err != nil {
+				logger.Warn("Initial fetch failed, will seed on the first successful scheduled run", "err", err, "took", time.Since(start).Round(time.Millisecond))
+				return false
+			}
+			logger.Info("Initial fetch done, feed seeded without sending", "took", time.Since(start).Round(time.Millisecond))
+			return true
+		})
 
 		schedule := hashSchedule(name, cfg.Schedule)
 		// format: * * * * *   -> without seconds (5 elements)
@@ -134,6 +152,12 @@ func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, job
 		j, err := s.NewJob(
 			gocron.CronJob(schedule, withSeconds),
 			gocron.NewTask(func(contxt context.Context) error {
+				select {
+				case <-ready:
+				default:
+					logger.Info("Skipping run, initial fetch still pending")
+					return nil
+				}
 				return rssJob.RetrieveAndSendNewItems(contxt)
 			}),
 			gocron.WithName(name),
@@ -166,7 +190,39 @@ func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, job
 		}
 	}
 
+	slog.Info("Jobs set up", "jobs", len(c.Jobs))
+	// initial fetches run in the background so a slow feed doesn't hold up
+	// the scheduler; each job skips its runs until its own fetch is done
+	if len(inits) > 0 {
+		go func() {
+			start := time.Now()
+			ok := runAll(inits, int(c.MaxConcurrentJobs))
+			slog.Info("Initial fetches finished", "ok", ok, "failed", len(inits)-ok, "took", time.Since(start).Round(time.Second))
+		}()
+	}
 	return s, nil
+}
+
+// runAll runs fns with at most limit at once and returns how many returned
+// true; limit <= 0 means no limit
+func runAll(fns []func() bool, limit int) int {
+	if limit <= 0 {
+		limit = max(len(fns), 1)
+	}
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	var ok atomic.Int64
+	for _, fn := range fns {
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			if fn() {
+				ok.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	return int(ok.Load())
 }
 
 // cronRanges are the value ranges of the 6 cron fields, seconds first

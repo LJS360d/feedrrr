@@ -64,6 +64,8 @@ type FeedrrrConfig struct {
 	Jobs    map[string]JobConfig `mapstructure:"jobs"`
 	Sinks   map[string][]string  `mapstructure:"sinks"`
 	SendGap time.Duration        `mapstructure:"send_gap"`
+	// MaxConcurrentJobs caps jobs running at once; 0 means no limit
+	MaxConcurrentJobs uint `mapstructure:"max_concurrent_jobs"`
 }
 
 type JobConfig struct {

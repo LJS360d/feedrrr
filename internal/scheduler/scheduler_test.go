@@ -72,3 +72,17 @@ func TestHashScheduleFieldsIndependent(t *testing.T) {
 		t.Errorf("%d of 200 jobs have second within 1 of minute", near)
 	}
 }
+
+func TestRunAllCountsSuccesses(t *testing.T) {
+	fns := []func() bool{
+		func() bool { return true },
+		func() bool { return false },
+		func() bool { return true },
+	}
+	if got := runAll(fns, 1); got != 2 {
+		t.Errorf("got %d, want 2", got)
+	}
+	if got := runAll(nil, 0); got != 0 {
+		t.Errorf("got %d, want 0", got)
+	}
+}
