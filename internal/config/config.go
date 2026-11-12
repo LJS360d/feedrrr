@@ -66,6 +66,8 @@ type FeedrrrConfig struct {
 	SendGap time.Duration        `mapstructure:"send_gap"`
 	// MaxConcurrentJobs caps jobs running at once; 0 means no limit
 	MaxConcurrentJobs uint `mapstructure:"max_concurrent_jobs"`
+	// MaxFetchesPerHost caps concurrent feed fetches to one host; 0 means no limit
+	MaxFetchesPerHost uint `mapstructure:"max_fetches_per_host"`
 	// StateDir keeps job state across restarts; empty keeps it in memory only
 	StateDir string `mapstructure:"state_dir"`
 }

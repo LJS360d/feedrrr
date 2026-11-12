@@ -30,6 +30,10 @@ func SetupJobs(ctx context.Context, c *config.FeedrrrConfig, jobSinks *map[strin
 	opts := []gocron.SchedulerOption{gocron.WithStopTimeout(StopTimeout)}
 	if c.MaxConcurrentJobs > 0 {
 		opts = append(opts, gocron.WithLimitConcurrentJobs(c.MaxConcurrentJobs, gocron.LimitModeWait))
+		if c.MaxFetchesPerHost > 0 {
+			slog.Warn("max_concurrent_jobs with max_fetches_per_host: jobs waiting for a host keep their slot, " +
+				"so a slow host can delay every other job; prefer max_fetches_per_host alone")
+		}
 	}
 	s, err := gocron.NewScheduler(opts...)
 	if err != nil {

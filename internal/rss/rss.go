@@ -2,6 +2,7 @@ package rss
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -42,9 +43,29 @@ type RSSJob struct {
 	imageRewrites []ImageRewrite
 	// backfill is how many of the newest items the first run sends
 	backfill int
+	// fetchTimeout bounds each fetch, and the wait for a slot on its host
+	fetchTimeout time.Duration
 }
 
 func (j *RSSJob) fetch(ctx context.Context) (*gofeed.Feed, error) {
+	waitStart := time.Now()
+	waitCtx, cancel := context.WithCancel(ctx)
+	if j.fetchTimeout > 0 {
+		cancel()
+		waitCtx, cancel = context.WithTimeout(ctx, j.fetchTimeout)
+	}
+	release, err := acquireHost(waitCtx, j.feedURL.Host)
+	cancel()
+	if err != nil {
+		if ctx.Err() == nil {
+			return nil, fmt.Errorf("no fetch slot for host %s within %s (max_fetches_per_host reached), will retry next run", j.feedURL.Host, j.fetchTimeout)
+		}
+		return nil, err
+	}
+	defer release()
+	if waited := time.Since(waitStart); waited > time.Second {
+		j.logger.Debug("Waited for a fetch slot on host", "host", j.feedURL.Host, "waited", waited.Round(time.Millisecond))
+	}
 	feed, err := j.fp.ParseURLWithContext(j.feedURL.String(), ctx)
 	if err != nil {
 		return nil, err
@@ -402,6 +423,7 @@ func newRSSJob(logger slog.Logger, url url.URL, kind string, opts JobOptions, se
 		requireImage:  opts.RequireImage,
 		hideTitle:     opts.HideTitle,
 		backfill:      max(opts.Backfill, 0),
+		fetchTimeout:  opts.FetchTimeout,
 		imageRewrites: opts.ImageRewrites,
 	}
 }

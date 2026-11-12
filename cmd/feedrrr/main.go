@@ -82,6 +82,19 @@ func main() {
 	}
 
 	rss.SetSendGap(c.SendGap)
+	rss.SetMaxFetchesPerHost(int(c.MaxFetchesPerHost))
+	sendGap := c.SendGap
+	if sendGap <= 0 {
+		sendGap = rss.DefaultSendGap
+	}
+	slog.Info("Loaded config",
+		"jobs", len(c.Jobs),
+		"sinks", len(c.Sinks),
+		"send_gap", sendGap,
+		"max_concurrent_jobs", c.MaxConcurrentJobs,
+		"max_fetches_per_host", c.MaxFetchesPerHost,
+		"state_dir", c.StateDir,
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -79,7 +79,12 @@ All configuration keys can be overridden via environment variables prefixed with
 # Sink URLs differing only in their query parameters count as the same sink.
 send_gap: 500ms
 # Maximum number of jobs running at once, others wait (optional, default: 0 = no limit)
+# Waiting runs queue up, and a job waiting for a host slot keeps its job slot: combined
+# with max_fetches_per_host, one slow host can delay every other job. Prefer max_fetches_per_host alone.
 max_concurrent_jobs: 8
+# Maximum number of concurrent feed fetches to the same host, others wait (optional, default: 0 = no limit)
+# A fetch waits at most its fetch_timeout for a slot, then the run fails and retries on schedule.
+max_fetches_per_host: 2
 # Directory keeping each job's state across restarts (optional, default: in memory only)
 # Restored jobs skip the initial fetch and send items published while feedrrr was down.
 # One small JSON file per job, rewritten only when it changes. The directory must be

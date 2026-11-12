@@ -441,3 +441,19 @@ func TestSeenStableBetweenRuns(t *testing.T) {
 		t.Errorf("last seen not refreshed after seenRefresh: %v", got)
 	}
 }
+
+func TestFetchGivesUpWaitingForHost(t *testing.T) {
+	SetMaxFetchesPerHost(1)
+	defer SetMaxFetchesPerHost(0)
+	u := serveFeed(t, func() string { return rssDoc(``) })
+
+	release, err := acquireHost(context.Background(), u.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	job := NewGUIDJob(*slog.Default(), *u, JobOptions{FetchTimeout: 50 * time.Millisecond}, &recordingSender{})
+	if err := job.Init(context.Background()); err == nil {
+		t.Fatal("fetch should give up when the host stays busy past the fetch timeout")
+	}
+}
