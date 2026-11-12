@@ -44,7 +44,7 @@ func TestInstantSenderUploadsImages(t *testing.T) {
 	embeds := NewEmbedCollector(false)
 	tmpl := embedTemplate(t, embeds, `{{.Link}}{{ range .Images }}{{ embed . }}{{ end }}`)
 	r := &fakeRouter{}
-	s := NewInstantSender(r, tmpl, embeds, uploader)
+	s := NewInstantSender(r, nil, tmpl, embeds, uploader)
 
 	images := []string{srv.URL + "/small.png", srv.URL + "/img-original/img/2026/x_p0.png", srv.URL + "/missing.png"}
 	must(t, s.Enqueue("", RSSItem{Link: "https://l/a", Images: images}))
@@ -95,7 +95,7 @@ func TestUploadNothingAttachable(t *testing.T) {
 	t.Cleanup(srv.Close)
 	embeds := NewEmbedCollector(false)
 	r := &fakeRouter{}
-	s := NewInstantSender(r, embedTemplate(t, embeds, `{{.Link}}{{ range .Images }}{{ embed . }}{{ end }}`), embeds, NewImageUploader("", 5*time.Second, nil))
+	s := NewInstantSender(r, nil, embedTemplate(t, embeds, `{{.Link}}{{ range .Images }}{{ embed . }}{{ end }}`), embeds, NewImageUploader("", 5*time.Second, nil))
 	must(t, s.Enqueue("", RSSItem{Link: "https://l/a", Images: []string{srv.URL + "/x.png"}}))
 	flush(t, s)
 	if len(r.items) != 1 || len(r.items[0]) != 1 || r.items[0][0].Text != "https://l/a" || len(r.items[0][0].Fields) != 0 {

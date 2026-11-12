@@ -75,7 +75,8 @@ func main() {
 		utility.HandleErr("Error parsing config", err)
 	}
 	jobSinks := make(map[string]*router.ServiceRouter)
-	err = sinks.SetupSinks(&jobSinks, c)
+	jobURLs := make(map[string][]string)
+	err = sinks.SetupSinks(&jobSinks, jobURLs, c)
 	if err != nil {
 		utility.HandleErr("Error setting up sinks", err)
 	}
@@ -85,7 +86,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	s, err := scheduler.SetupJobs(ctx, &c.Jobs, &jobSinks)
+	s, err := scheduler.SetupJobs(ctx, &c.Jobs, &jobSinks, jobURLs)
 	if err != nil {
 		utility.HandleErr("Error setting up scheduled jobs", err)
 	}

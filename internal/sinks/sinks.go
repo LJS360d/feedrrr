@@ -13,7 +13,8 @@ import (
 
 const maxRecursionDepth = 10
 
-func SetupSinks(resultJobSinks *map[string]*router.ServiceRouter, c *config.FeedrrrConfig) error {
+// SetupSinks creates each job's router and records the sink URLs it resolved to
+func SetupSinks(resultJobSinks *map[string]*router.ServiceRouter, resultJobURLs map[string][]string, c *config.FeedrrrConfig) error {
 	sinkAliases, err := flattenSinks(&c.Sinks)
 	if err != nil {
 		return err
@@ -39,6 +40,7 @@ func SetupSinks(resultJobSinks *map[string]*router.ServiceRouter, c *config.Feed
 		}
 
 		(*resultJobSinks)[jobName] = sender
+		resultJobURLs[jobName] = resolvedJobSinks
 	}
 
 	return nil

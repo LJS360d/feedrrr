@@ -75,7 +75,7 @@ func TestInstantSenderEmbeds(t *testing.T) {
 	embeds := NewEmbedCollector(false)
 	tmpl := embedTemplate(t, embeds, `{{.Title}} {{.Link}}{{ range .Images }}{{ embed . }}{{ end }}`)
 	r := &fakeRouter{}
-	s := NewInstantSender(r, tmpl, embeds, nil)
+	s := NewInstantSender(r, nil, tmpl, embeds, nil)
 
 	images := []string{"https://i/1", "https://i/2", "https://i/3", "https://i/4", "https://i/5"}
 	must(t, s.Enqueue("with images", RSSItem{Title: "a", Link: "https://l/a", Images: images, Image: images[0]}))
@@ -143,7 +143,7 @@ func TestEmbedIgnoresEmpty(t *testing.T) {
 	embeds := NewEmbedCollector(false)
 	tmpl := embedTemplate(t, embeds, `{{.Title}}{{ embed .Image }}`)
 	r := &fakeRouter{}
-	s := NewInstantSender(r, tmpl, embeds, nil)
+	s := NewInstantSender(r, nil, tmpl, embeds, nil)
 
 	must(t, s.Enqueue("t", RSSItem{Title: "x"}))
 	flush(t, s)
@@ -157,7 +157,7 @@ func TestEmbedHTMLEngine(t *testing.T) {
 	funcs := map[string]any{"embed": embeds.Embed}
 	tmpl := htmltemplate.Must(htmltemplate.New("t").Funcs(funcs).Parse(`{{.Title}}{{ embed .Image }}`))
 	r := &fakeRouter{}
-	s := NewInstantSender(r, tmpl, embeds, nil)
+	s := NewInstantSender(r, nil, tmpl, embeds, nil)
 
 	must(t, s.Enqueue("t", RSSItem{Title: "x", Image: "https://i/1?a=1&b=2"}))
 	flush(t, s)
@@ -171,7 +171,7 @@ func TestBatchedSenderEmbedsInline(t *testing.T) {
 	tmpl := embedTemplate(t, embeds, `{{.Title}}
 {{ range .Images }}{{ embed . }}{{ end }}`)
 	r := &fakeRouter{}
-	s := NewBatchedSender(r, tmpl, embeds)
+	s := NewBatchedSender(r, nil, tmpl, embeds)
 
 	must(t, s.Enqueue("a", RSSItem{Title: "a", Images: []string{"https://i/1", "https://i/2"}}))
 	must(t, s.Enqueue("b", RSSItem{Title: "b", Images: []string{"https://i/3"}}))
@@ -216,7 +216,7 @@ func (r *failingRouter) Send(msg string, params *types.Params) []error {
 
 func TestInstantSenderReportsFailedItems(t *testing.T) {
 	r := &failingRouter{fail: map[string]bool{"b": true}}
-	s := NewInstantSender(r, template.Must(template.New("t").Parse(`{{.Title}}`)), nil, nil)
+	s := NewInstantSender(r, nil, template.Must(template.New("t").Parse(`{{.Title}}`)), nil, nil)
 
 	for _, title := range []string{"a", "b", "c"} {
 		must(t, s.Enqueue(title, RSSItem{Title: title, GUID: "guid-" + title}))
@@ -235,7 +235,7 @@ func TestInstantSenderReportsFailedItems(t *testing.T) {
 
 func TestBatchedSenderReportsFailure(t *testing.T) {
 	r := &failingRouter{fail: map[string]bool{"": true}}
-	s := NewBatchedSender(r, template.Must(template.New("t").Parse(`{{.Title}}`)), nil)
+	s := NewBatchedSender(r, nil, template.Must(template.New("t").Parse(`{{.Title}}`)), nil)
 
 	must(t, s.Enqueue("a", RSSItem{Title: "a", GUID: "ga"}))
 	must(t, s.Enqueue("b", RSSItem{Title: "b", GUID: "gb"}))

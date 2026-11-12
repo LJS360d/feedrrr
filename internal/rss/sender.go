@@ -44,6 +44,7 @@ type BaseMessageSender struct {
 	router Router
 	params *types.Params
 	queue  []queuedItem
+	pacers pacerGroup
 }
 
 type BatchedSender struct {
@@ -56,17 +57,18 @@ type InstantSender struct {
 	uploader *ImageUploader
 }
 
-// NewBatchedSender joins all items of a run into one plain-text message
-func NewBatchedSender(router Router, tmpl Template, embeds *EmbedCollector) MessageSender {
+// NewBatchedSender joins all items of a run into one plain-text message.
+// sinks are the router's URLs, sends to the same sink are paced across senders
+func NewBatchedSender(router Router, sinks []string, tmpl Template, embeds *EmbedCollector) MessageSender {
 	slog.Debug("Initialized new batched sender")
-	return &BatchedSender{BaseMessageSender{router: router, tmpl: tmpl, embeds: embeds, params: &types.Params{}}}
+	return &BatchedSender{BaseMessageSender{router: router, tmpl: tmpl, embeds: embeds, params: &types.Params{}, pacers: pacersFor(sinks)}}
 }
 
 // NewInstantSender sends every item on its own, with embed images attached.
 // uploader, if set, attaches them as files
-func NewInstantSender(router Router, tmpl Template, embeds *EmbedCollector, uploader *ImageUploader) MessageSender {
+func NewInstantSender(router Router, sinks []string, tmpl Template, embeds *EmbedCollector, uploader *ImageUploader) MessageSender {
 	slog.Debug("Initialized new instant sender", "upload", uploader != nil)
-	return &InstantSender{BaseMessageSender{router: router, tmpl: tmpl, embeds: embeds, params: &types.Params{}}, uploader}
+	return &InstantSender{BaseMessageSender{router: router, tmpl: tmpl, embeds: embeds, params: &types.Params{}, pacers: pacersFor(sinks)}, uploader}
 }
 
 // imageItems lays out an item with images, attaching them when uploading
@@ -127,7 +129,7 @@ func (s *BatchedSender) Flush() ([]RSSItem, error) {
 	}
 
 	var sendErrs []error
-	sendPacer.do(func() {
+	s.pacers.do(func() {
 		sendErrs = s.router.Send(strings.Join(msgs, "\n"), s.params)
 	})
 	if err := errors.Join(sendErrs...); err != nil {
@@ -156,7 +158,7 @@ func (s *InstantSender) Flush() ([]RSSItem, error) {
 		}
 
 		var sendErrs []error
-		sendPacer.do(func() {
+		s.pacers.do(func() {
 			if len(items) > 0 {
 				sendErrs = s.router.SendItems(items, *s.params)
 			} else {

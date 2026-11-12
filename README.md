@@ -74,8 +74,9 @@ All configuration keys can be overridden via environment variables prefixed with
 #### YAML config
 
 ```yaml
-# Minimum time between two messages, across all jobs (optional, default: 1s)
-# sends are serialized; the gap is counted from the end of the previous send.
+# Minimum time between two messages to the same sink (optional, default: 1s)
+# sends to a sink are serialized; the gap is counted from the end of the previous send.
+# Sink URLs differing only in their query parameters count as the same sink.
 send_gap: 500ms
 ```
 

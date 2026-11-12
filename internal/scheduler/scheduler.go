@@ -18,7 +18,7 @@ import (
 	"github.com/nicholas-fedor/shoutrrr/pkg/router"
 )
 
-func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, jobSinks *map[string]*router.ServiceRouter) (gocron.Scheduler, error) {
+func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, jobSinks *map[string]*router.ServiceRouter, jobURLs map[string][]string) (gocron.Scheduler, error) {
 	s, err := gocron.NewScheduler()
 	if err != nil {
 		return nil, err
@@ -81,12 +81,12 @@ func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, job
 			if cfg.UploadImages {
 				uploader = rss.NewImageUploader(cfg.ImageReferer, config.DefaultFetchTimeout, rewrites)
 			}
-			sender = rss.NewInstantSender(router, tmpl, embeds, uploader)
+			sender = rss.NewInstantSender(router, jobURLs[name], tmpl, embeds, uploader)
 		case config.SenderModeBatched:
 			if cfg.UploadImages {
 				logger.Warn("upload_images has no effect in batched sender mode")
 			}
-			sender = rss.NewBatchedSender(router, tmpl, embeds)
+			sender = rss.NewBatchedSender(router, jobURLs[name], tmpl, embeds)
 		}
 
 		fetchTimeout := cfg.FetchTimeout
