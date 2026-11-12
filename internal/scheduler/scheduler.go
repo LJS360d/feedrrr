@@ -2,11 +2,14 @@ package scheduler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	htmltemplate "html/template"
 	"log/slog"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -119,16 +122,17 @@ func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, job
 			logger.Warn("Initial fetch failed, will retry on schedule", "err", err)
 		}
 
+		schedule := hashSchedule(name, cfg.Schedule)
 		// format: * * * * *   -> without seconds (5 elements)
 		//         * * * * * * -> with seconds (6 elements)
-		scheduleSplit := strings.Split(cfg.Schedule, " ")
+		scheduleSplit := strings.Split(schedule, " ")
 		if strings.HasPrefix(scheduleSplit[0], "TZ=") || strings.HasPrefix(scheduleSplit[0], "CRON_TZ=") {
 			scheduleSplit = scheduleSplit[1:]
 		}
 		withSeconds := len(scheduleSplit) > 5
 
 		j, err := s.NewJob(
-			gocron.CronJob(cfg.Schedule, withSeconds),
+			gocron.CronJob(schedule, withSeconds),
 			gocron.NewTask(func(contxt context.Context) error {
 				return rssJob.RetrieveAndSendNewItems(contxt)
 			}),
@@ -155,10 +159,55 @@ func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, job
 			return nil, err
 		}
 
-		slog.Info("Added cronjob to scheduler", "name", name, "id", j.ID(), "schedule", cfg.Schedule)
+		if schedule != cfg.Schedule {
+			logger.Info("Added cronjob to scheduler", "id", j.ID(), "schedule", cfg.Schedule, "resolved", schedule)
+		} else {
+			logger.Info("Added cronjob to scheduler", "id", j.ID(), "schedule", schedule)
+		}
 	}
 
 	return s, nil
+}
+
+// cronRanges are the value ranges of the 6 cron fields, seconds first
+var cronRanges = [6][2]int{{0, 59}, {0, 59}, {0, 23}, {1, 28}, {1, 12}, {0, 6}}
+
+// hashSchedule replaces H fields with a value derived from the job name, and
+// H/n with a step of n starting at such a value, so jobs spread out evenly
+// but each keeps the same times across restarts
+func hashSchedule(name, schedule string) string {
+	fields := strings.Fields(schedule)
+	var prefix []string
+	if len(fields) > 0 && (strings.HasPrefix(fields[0], "TZ=") || strings.HasPrefix(fields[0], "CRON_TZ=")) {
+		prefix, fields = fields[:1], fields[1:]
+	}
+	ranges := cronRanges[:]
+	if len(fields) == 5 {
+		ranges = ranges[1:]
+	}
+	for i, f := range fields {
+		if i >= len(ranges) || (f != "H" && !strings.HasPrefix(f, "H/")) {
+			continue
+		}
+		lo, hi := ranges[i][0], ranges[i][1]
+		span := hi - lo + 1
+		step := 0
+		if f != "H" {
+			n, err := strconv.Atoi(f[2:])
+			if err != nil || n <= 0 {
+				continue
+			}
+			step, span = n, min(n, span)
+		}
+		// sha256 so each field's value is independent of the others; a weak
+		// hash (fnv) made second and minute nearly equal, clumping jobs
+		h := sha256.Sum256([]byte(name + "/" + strconv.Itoa(i)))
+		fields[i] = strconv.Itoa(lo + int(binary.BigEndian.Uint64(h[:8])%uint64(span)))
+		if step > 0 {
+			fields[i] += "/" + strconv.Itoa(step)
+		}
+	}
+	return strings.Join(append(prefix, fields...), " ")
 }
 
 // templateFuncs returns the functions available in msg_template.

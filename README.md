@@ -182,6 +182,7 @@ jobs:
 ```
 
 The `schedule` field accepts standard 5-field cron expressions (`minute hour dom month dow`) as well as 6-field expressions with seconds (`second minute hour dom month dow`). Timezone-aware schedules are supported via a `TZ=` or `CRON_TZ=` prefix (e.g. `TZ=Europe/Berlin 0 9 * * *`).
+A field set to `H` gets a value derived from the job name, and `H/n` a step of `n` starting at such a value (e.g. `H H * * * *` runs hourly at a fixed second and minute per job), which spreads many jobs over the period without picking offsets by hand.
 
 For the full reference on the templating engine, please see [html/template](https://pkg.go.dev/html/template) (`template_engine: html`, the default) or [text/template](https://pkg.go.dev/text/template) (`template_engine: text`).
 The default message template is:
