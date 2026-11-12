@@ -387,3 +387,57 @@ func TestJobAppliesImageRewrites(t *testing.T) {
 		t.Fatalf("sent %+v, want image %s", sender.sentItems, want)
 	}
 }
+
+func TestGUIDJobRestoredStateSkipsSeenItems(t *testing.T) {
+	feed := rssDoc(`<item><title>a</title><guid>a</guid></item>`)
+	u := serveFeed(t, func() string { return feed })
+	ctx := context.Background()
+
+	first := NewGUIDJob(*slog.Default(), *u, JobOptions{FetchTimeout: 5 * time.Second}, &recordingSender{})
+	if err := first.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	feed = rssDoc(`<item><title>b</title><guid>b</guid></item><item><title>a</title><guid>a</guid></item>`)
+	sender := &recordingSender{}
+	second := NewGUIDJob(*slog.Default(), *u, JobOptions{FetchTimeout: 5 * time.Second}, sender)
+	if !second.Restore(first.State()) {
+		t.Fatal("restore failed")
+	}
+	if err := second.RetrieveAndSendNewItems(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.sent) != 1 || sender.sent[0] != "b" {
+		t.Fatalf("sent %v, want [b]", sender.sent)
+	}
+}
+
+func TestSeenStableBetweenRuns(t *testing.T) {
+	feed := rssDoc(`<item><title>a</title><guid>a</guid></item>`)
+	u := serveFeed(t, func() string { return feed })
+	ctx := context.Background()
+	job := NewGUIDJob(*slog.Default(), *u, JobOptions{FetchTimeout: 5 * time.Second}, &recordingSender{}).(*GUIDJob)
+	clock := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	job.now = func() time.Time { return clock }
+	if err := job.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// unchanged feed within seenRefresh: state stays identical, nothing to save
+	clock = clock.Add(time.Hour)
+	if err := job.RetrieveAndSendNewItems(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := job.State().Seen["a"]; !got.Equal(clock.Add(-time.Hour)) {
+		t.Errorf("last seen refreshed after 1h: %v", got)
+	}
+
+	// past seenRefresh it's bumped, so items in the feed are never pruned
+	clock = clock.Add(seenRefresh)
+	if err := job.RetrieveAndSendNewItems(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := job.State().Seen["a"]; !got.Equal(clock) {
+		t.Errorf("last seen not refreshed after seenRefresh: %v", got)
+	}
+}

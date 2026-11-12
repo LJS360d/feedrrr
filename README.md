@@ -80,6 +80,12 @@ All configuration keys can be overridden via environment variables prefixed with
 send_gap: 500ms
 # Maximum number of jobs running at once, others wait (optional, default: 0 = no limit)
 max_concurrent_jobs: 8
+# Directory keeping each job's state across restarts (optional, default: in memory only)
+# Restored jobs skip the initial fetch and send items published while feedrrr was down.
+# One small JSON file per job, rewritten only when it changes. The directory must be
+# writable (the container runs as uid 10021), else feedrrr exits at startup.
+# A job whose source changed, or whose file is missing or corrupt, is seeded again.
+state_dir: /var/lib/feedrrr
 ```
 
 ##### Jobs
@@ -185,7 +191,7 @@ jobs:
 
 The `schedule` field accepts standard 5-field cron expressions (`minute hour dom month dow`) as well as 6-field expressions with seconds (`second minute hour dom month dow`). Timezone-aware schedules are supported via a `TZ=` or `CRON_TZ=` prefix (e.g. `TZ=Europe/Berlin 0 9 * * *`).
 A field set to `H` gets a value derived from the job name, and `H/n` a step of `n` starting at such a value (e.g. `H H * * * *` runs hourly at a fixed second and minute per job), which spreads many jobs over the period without picking offsets by hand.
-Initial fetches run in the background after startup; a job skips its scheduled runs until its own initial fetch is done.
+Initial fetches run in the background after startup; a job skips its scheduled runs until its own initial fetch is done. On shutdown, running jobs get up to 60 s to finish sending and save their state.
 
 For the full reference on the templating engine, please see [html/template](https://pkg.go.dev/html/template) (`template_engine: html`, the default) or [text/template](https://pkg.go.dev/text/template) (`template_engine: text`).
 The default message template is:

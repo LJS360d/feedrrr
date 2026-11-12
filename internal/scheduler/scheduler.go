@@ -25,7 +25,9 @@ import (
 )
 
 func SetupJobs(ctx context.Context, c *config.FeedrrrConfig, jobSinks *map[string]*router.ServiceRouter, jobURLs map[string][]string) (gocron.Scheduler, error) {
-	var opts []gocron.SchedulerOption
+	// running jobs get their context cancelled on shutdown and then have this
+	// long to finish sending and save their state
+	opts := []gocron.SchedulerOption{gocron.WithStopTimeout(StopTimeout)}
 	if c.MaxConcurrentJobs > 0 {
 		opts = append(opts, gocron.WithLimitConcurrentJobs(c.MaxConcurrentJobs, gocron.LimitModeWait))
 	}
@@ -33,8 +35,17 @@ func SetupJobs(ctx context.Context, c *config.FeedrrrConfig, jobSinks *map[strin
 	if err != nil {
 		return nil, err
 	}
+	if err := prepareStateDir(c.StateDir); err != nil {
+		return nil, err
+	}
+	if c.StateDir == "" {
+		slog.Info("No state_dir set: job state is kept in memory only, restarts reseed every feed")
+	} else {
+		slog.Info("Persisting job state", "state_dir", c.StateDir)
+	}
 
 	var inits []func() bool
+	restored := 0
 	for name, cfg := range c.Jobs {
 		router, exists := (*jobSinks)[name]
 
@@ -123,22 +134,29 @@ func SetupJobs(ctx context.Context, c *config.FeedrrrConfig, jobSinks *map[strin
 			rssJob = rss.NewPubDateJob(*logger, *url, opts, cfg.SendFutureArticles, sender)
 		}
 
+		state := newStateFile(c.StateDir, name, cfg.Source, logger)
 		// closed once the job has state to work from; runs before that are
 		// skipped so they can't race the initial fetch
 		ready := make(chan struct{})
-		inits = append(inits, func() bool {
-			defer close(ready)
-			// A feed that fails at startup (timeout, 4xx/5xx, bad XML, DNS...) must not
-			// take the whole daemon down: the job seeds its state on the first
-			// successful scheduled fetch instead
-			start := time.Now()
-			if err := rssJob.Init(ctx); err != nil {
-				logger.Warn("Initial fetch failed, will seed on the first successful scheduled run", "err", err, "took", time.Since(start).Round(time.Millisecond))
-				return false
-			}
-			logger.Info("Initial fetch done, feed seeded without sending", "took", time.Since(start).Round(time.Millisecond))
-			return true
-		})
+		if state.load(rssJob) {
+			restored++
+			close(ready)
+		} else {
+			inits = append(inits, func() bool {
+				defer close(ready)
+				// A feed that fails at startup (timeout, 4xx/5xx, bad XML, DNS...) must not
+				// take the whole daemon down: the job seeds its state on the first
+				// successful scheduled fetch instead
+				start := time.Now()
+				if err := rssJob.Init(ctx); err != nil {
+					logger.Warn("Initial fetch failed, will seed on the first successful scheduled run", "err", err, "took", time.Since(start).Round(time.Millisecond))
+					return false
+				}
+				logger.Info("Initial fetch done, feed seeded without sending", "took", time.Since(start).Round(time.Millisecond))
+				state.save(rssJob)
+				return true
+			})
+		}
 
 		schedule := hashSchedule(name, cfg.Schedule)
 		// format: * * * * *   -> without seconds (5 elements)
@@ -158,7 +176,9 @@ func SetupJobs(ctx context.Context, c *config.FeedrrrConfig, jobSinks *map[strin
 					logger.Info("Skipping run, initial fetch still pending")
 					return nil
 				}
-				return rssJob.RetrieveAndSendNewItems(contxt)
+				err := rssJob.RetrieveAndSendNewItems(contxt)
+				state.save(rssJob)
+				return err
 			}),
 			gocron.WithName(name),
 			gocron.WithContext(ctx),
@@ -190,7 +210,7 @@ func SetupJobs(ctx context.Context, c *config.FeedrrrConfig, jobSinks *map[strin
 		}
 	}
 
-	slog.Info("Jobs set up", "jobs", len(c.Jobs))
+	slog.Info("Jobs set up", "jobs", len(c.Jobs), "restored", restored, "to_seed", len(inits))
 	// initial fetches run in the background so a slow feed doesn't hold up
 	// the scheduler; each job skips its runs until its own fetch is done
 	if len(inits) > 0 {
@@ -202,6 +222,9 @@ func SetupJobs(ctx context.Context, c *config.FeedrrrConfig, jobSinks *map[strin
 	}
 	return s, nil
 }
+
+// StopTimeout is how long shutdown waits for running jobs
+const StopTimeout = 60 * time.Second
 
 // runAll runs fns with at most limit at once and returns how many returned
 // true; limit <= 0 means no limit

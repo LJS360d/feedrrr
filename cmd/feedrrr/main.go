@@ -91,16 +91,21 @@ func main() {
 		utility.HandleErr("Error setting up scheduled jobs", err)
 	}
 
-	s.Start()
-
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	<-sigChan
+	s.Start()
+	slog.Info("Scheduler started")
 
-	// when you're done, shut it down
+	sig := <-sigChan
+	slog.Info("Shutting down, waiting for running jobs to save their state", "signal", sig.String(), "timeout", scheduler.StopTimeout)
+
+	// cancel fetches still in flight (initial ones included); running jobs
+	// keep what they sent and mark the rest for retry
+	cancel()
 	err = s.Shutdown()
 	if err != nil {
-		utility.HandleErr("Error shutting down jobs", err)
+		utility.HandleErr("Jobs still running at shutdown, their state may be stale (items could be resent)", err)
 	}
+	slog.Info("Shutdown complete")
 }

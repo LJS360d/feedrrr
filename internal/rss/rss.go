@@ -3,6 +3,7 @@ package rss
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"time"
@@ -13,6 +14,18 @@ import (
 type FeedPoller interface {
 	Init(ctx context.Context) error
 	RetrieveAndSendNewItems(ctx context.Context) error
+	// State returns what a job needs to resume after a restart
+	State() JobState
+	// Restore resumes from a saved state, reporting whether it was usable
+	Restore(JobState) bool
+}
+
+type JobState struct {
+	// no omitempty: an empty map (feed was empty when seeded) must restore
+	// as such, nil means "not a GUID job state"
+	Seen        map[string]time.Time `json:"seen"`
+	LastPubDate *time.Time           `json:"last_pub_date,omitempty"`
+	Delivered   map[string]bool      `json:"delivered,omitempty"`
 }
 
 type RSSJob struct {
@@ -80,6 +93,11 @@ func (j *RSSJob) send(items []*gofeed.Item) (failed map[string]bool, err error) 
 // the feed, so items that drop out and come back aren't resent
 const seenRetention = 7 * 24 * time.Hour
 
+// seenRefresh is how stale a key's last-seen time may get before it's
+// updated; refreshing on every run would change (and rewrite) the saved
+// state each time. Keys still in the feed stay far inside seenRetention
+const seenRefresh = 24 * time.Hour
+
 // GUIDJob sends items whose key wasn't seen within seenRetention
 type GUIDJob struct {
 	RSSJob
@@ -135,7 +153,10 @@ func (j *GUIDJob) markSeen(items []*gofeed.Item, skip map[string]bool) {
 		if item == nil || skip[itemKey(item)] {
 			continue
 		}
-		j.seen[itemKey(item)] = now
+		key := itemKey(item)
+		if last, ok := j.seen[key]; !ok || now.Sub(last) >= seenRefresh {
+			j.seen[key] = now
+		}
 	}
 	for key, last := range j.seen {
 		if now.Sub(last) > seenRetention {
@@ -214,15 +235,45 @@ func (j *GUIDJob) RetrieveAndSendNewItems(ctx context.Context) error {
 		}
 	}
 
+	if len(items) > 0 {
+		j.logger.Info("Found new items", "new", len(items), "in_feed", len(feed.Items))
+	}
 	// items that failed to send stay unseen so the next run retries just them
 	failed, err := j.send(items)
 	j.markSeen(feed.Items, failed)
 	if err != nil {
+		j.logger.Warn("Some items failed to send, they'll be retried next run", "failed", len(failed), "new", len(items))
 		return err
 	}
 
 	j.logger.Debug("Successful iteration")
 	return nil
+}
+
+func (j *GUIDJob) State() JobState {
+	return JobState{Seen: maps.Clone(j.seen)}
+}
+
+func (j *GUIDJob) Restore(s JobState) bool {
+	if s.Seen == nil {
+		return false
+	}
+	j.seen = s.Seen
+	return true
+}
+
+func (j *PubDateJob) State() JobState {
+	t := *j.lastPubDate
+	return JobState{LastPubDate: &t, Delivered: maps.Clone(j.delivered)}
+}
+
+func (j *PubDateJob) Restore(s JobState) bool {
+	if s.LastPubDate == nil {
+		return false
+	}
+	*j.lastPubDate = *s.LastPubDate
+	j.delivered = s.Delivered
+	return true
 }
 
 func (j *PubDateJob) Init(ctx context.Context) error {
@@ -302,8 +353,12 @@ func (j *PubDateJob) RetrieveAndSendNewItems(ctx context.Context) error {
 		items = append(items, item)
 	}
 
+	if len(items) > 0 {
+		j.logger.Info("Found new items", "new", len(items), "in_feed", len(feed.Items), "since", j.lastPubDate.Format(time.RFC3339))
+	}
 	failed, err := j.send(items)
 	if err != nil {
+		j.logger.Warn("Some items failed to send, the run will be retried without resending the others", "failed", len(failed), "new", len(items))
 		for _, item := range items {
 			if key := itemKey(item); !failed[key] {
 				if j.delivered == nil {
