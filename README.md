@@ -168,6 +168,8 @@ jobs:
     # Available functions:
     #   html2text(html string) string // generates plaintext from html
     #   embed(url string) string      // attaches an image as an embed, see "Image feeds"
+    #   replace(s, old, new string) string // replaces every occurrence of old in s,
+    #     e.g. {{ replace .Link "://x.com/" "://fixupx.com/" }}
     #
     msg_template: |
       Item with a custom feed message appeared:

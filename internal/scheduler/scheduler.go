@@ -60,10 +60,7 @@ func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, job
 
 		// batched messages are plain text, so embed renders the URL there
 		embeds := rss.NewEmbedCollector(cfg.SenderMode == config.SenderModeBatched)
-		funcs := map[string]any{
-			"html2text": html2text.HTML2Text,
-			"embed":     embeds.Embed,
-		}
+		funcs := templateFuncs(embeds)
 		var tmpl rss.Template
 		switch cfg.TemplateEngine {
 		case config.TemplateEngineText:
@@ -162,4 +159,13 @@ func SetupJobs(ctx context.Context, jobConfigs *map[string]config.JobConfig, job
 	}
 
 	return s, nil
+}
+
+// templateFuncs returns the functions available in msg_template.
+func templateFuncs(embeds *rss.EmbedCollector) map[string]any {
+	return map[string]any{
+		"html2text": html2text.HTML2Text,
+		"embed":     embeds.Embed,
+		"replace":   strings.ReplaceAll,
+	}
 }
