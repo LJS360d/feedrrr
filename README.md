@@ -85,6 +85,10 @@ max_concurrent_jobs: 8
 # Maximum number of concurrent feed fetches to the same host, others wait (optional, default: 0 = no limit)
 # A fetch waits at most its fetch_timeout for a slot, then the run fails and retries on schedule.
 max_fetches_per_host: 2
+# Minimum time between the starts of two fetches to the same host, to stay under its
+# rate limit (optional, default: 0; needs max_fetches_per_host). Initial fetches wait for
+# their slot as long as it takes; scheduled ones at most their fetch_timeout.
+fetch_gap: 1s
 # Directory keeping each job's state across restarts (optional, default: in memory only)
 # Restored jobs skip the initial fetch and send items published while feedrrr was down.
 # One small JSON file per job, rewritten only when it changes. The directory must be

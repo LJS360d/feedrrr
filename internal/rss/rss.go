@@ -47,18 +47,19 @@ type RSSJob struct {
 	fetchTimeout time.Duration
 }
 
-func (j *RSSJob) fetch(ctx context.Context) (*gofeed.Feed, error) {
+// fetch waits at most waitLimit for a host slot; 0 waits as long as ctx allows
+func (j *RSSJob) fetch(ctx context.Context, waitLimit time.Duration) (*gofeed.Feed, error) {
 	waitStart := time.Now()
 	waitCtx, cancel := context.WithCancel(ctx)
-	if j.fetchTimeout > 0 {
+	if waitLimit > 0 {
 		cancel()
-		waitCtx, cancel = context.WithTimeout(ctx, j.fetchTimeout)
+		waitCtx, cancel = context.WithTimeout(ctx, waitLimit)
 	}
 	release, err := acquireHost(waitCtx, j.feedURL.Host)
 	cancel()
 	if err != nil {
 		if ctx.Err() == nil {
-			return nil, fmt.Errorf("no fetch slot for host %s within %s (max_fetches_per_host reached), will retry next run", j.feedURL.Host, j.fetchTimeout)
+			return nil, fmt.Errorf("no fetch slot for host %s within %s: %w", j.feedURL.Host, waitLimit, ErrHostBusy)
 		}
 		return nil, err
 	}
@@ -208,7 +209,7 @@ type PubDateJob struct {
 }
 
 func (j *GUIDJob) Init(ctx context.Context) error {
-	feed, err := j.fetch(ctx)
+	feed, err := j.fetch(ctx, 0)
 	if err != nil {
 		return err
 	}
@@ -234,7 +235,7 @@ func (j *GUIDJob) seed(items []*gofeed.Item) {
 }
 
 func (j *GUIDJob) RetrieveAndSendNewItems(ctx context.Context) error {
-	feed, err := j.fetch(ctx)
+	feed, err := j.fetch(ctx, j.fetchTimeout)
 	if err != nil {
 		return err
 	}
@@ -300,7 +301,7 @@ func (j *PubDateJob) Restore(s JobState) bool {
 func (j *PubDateJob) Init(ctx context.Context) error {
 	defer j.logger.Debug("Init", "lastPubDate", *j.lastPubDate)
 
-	feed, err := j.fetch(ctx)
+	feed, err := j.fetch(ctx, 0)
 	if err != nil {
 		return err
 	}
@@ -330,7 +331,7 @@ func (j *PubDateJob) Init(ctx context.Context) error {
 }
 
 func (j *PubDateJob) RetrieveAndSendNewItems(ctx context.Context) error {
-	feed, err := j.fetch(ctx)
+	feed, err := j.fetch(ctx, j.fetchTimeout)
 	if err != nil {
 		return err
 	}

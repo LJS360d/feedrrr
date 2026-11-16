@@ -453,7 +453,8 @@ func TestFetchGivesUpWaitingForHost(t *testing.T) {
 	}
 	defer release()
 	job := NewGUIDJob(*slog.Default(), *u, JobOptions{FetchTimeout: 50 * time.Millisecond}, &recordingSender{})
-	if err := job.Init(context.Background()); err == nil {
+	// scheduled runs give up; initial fetches wait as long as it takes
+	if err := job.RetrieveAndSendNewItems(context.Background()); err == nil {
 		t.Fatal("fetch should give up when the host stays busy past the fetch timeout")
 	}
 }

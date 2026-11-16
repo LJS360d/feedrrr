@@ -83,6 +83,7 @@ func main() {
 
 	rss.SetSendGap(c.SendGap)
 	rss.SetMaxFetchesPerHost(int(c.MaxFetchesPerHost))
+	rss.FetchGap = c.FetchGap
 	sendGap := c.SendGap
 	if sendGap <= 0 {
 		sendGap = rss.DefaultSendGap
@@ -93,6 +94,7 @@ func main() {
 		"send_gap", sendGap,
 		"max_concurrent_jobs", c.MaxConcurrentJobs,
 		"max_fetches_per_host", c.MaxFetchesPerHost,
+		"fetch_gap", c.FetchGap,
 		"state_dir", c.StateDir,
 	)
 

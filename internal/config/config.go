@@ -68,6 +68,8 @@ type FeedrrrConfig struct {
 	MaxConcurrentJobs uint `mapstructure:"max_concurrent_jobs"`
 	// MaxFetchesPerHost caps concurrent feed fetches to one host; 0 means no limit
 	MaxFetchesPerHost uint `mapstructure:"max_fetches_per_host"`
+	// FetchGap is the minimum time between two fetch starts to one host (needs max_fetches_per_host)
+	FetchGap time.Duration `mapstructure:"fetch_gap"`
 	// StateDir keeps job state across restarts; empty keeps it in memory only
 	StateDir string `mapstructure:"state_dir"`
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	htmltemplate "html/template"
 	"log/slog"
@@ -182,6 +183,11 @@ func SetupJobs(ctx context.Context, c *config.FeedrrrConfig, jobSinks *map[strin
 				}
 				err := rssJob.RetrieveAndSendNewItems(contxt)
 				state.save(rssJob)
+				// expected while startup fetches queue on a host; not a failure
+				if errors.Is(err, rss.ErrHostBusy) {
+					logger.Info("Skipping run, host busy", "err", err)
+					return nil
+				}
 				return err
 			}),
 			gocron.WithName(name),
