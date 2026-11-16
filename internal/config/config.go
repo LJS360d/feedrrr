@@ -87,7 +87,7 @@ type JobConfig struct {
 	FetchTimeout       time.Duration       `mapstructure:"fetch_timeout"`
 	RequireImage       bool                `mapstructure:"require_image"` // skip items without images
 	HideTitle          bool                `mapstructure:"hide_title"`    // send items without a title
-	Backfill           int                 `mapstructure:"backfill"`      // send the newest N items on the first run
+	Backfill           int                 `mapstructure:"backfill"`      // send the newest N items right after the job is seeded
 	UploadImages       bool                `mapstructure:"upload_images"` // attach embed images as files
 	ImageReferer       string              `mapstructure:"image_referer"` // Referer sent when downloading them
 	ImageRewrites      []ImageRewrite      `mapstructure:"image_rewrites"`

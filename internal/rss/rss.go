@@ -240,11 +240,11 @@ func (j *GUIDJob) RetrieveAndSendNewItems(ctx context.Context) error {
 		return err
 	}
 
-	// special case: the initial fetch failed, so seed state without sending
+	// special case: the initial fetch failed, so seed state now; only the
+	// backfill items stay unseen and get sent below
 	if j.seen == nil {
 		j.seed(feed.Items)
 		j.logger.Info("Seeded state on first successful fetch", "items", len(j.seen))
-		return nil
 	}
 
 	var items []*gofeed.Item

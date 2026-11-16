@@ -136,8 +136,11 @@ jobs:
     # Skip items that have no image (optional, default: false)
     require_image: false
 
-    # Send the newest N items of the feed on the first run (optional, default: 0)
-    # applies on every restart, since seen state isn't persisted
+    # Send the newest N items of the feed right after the job is seeded
+    # (optional, default: 0). Sent at startup, paced by send_gap, not at the
+    # first scheduled run. Without state_dir every restart reseeds, so this
+    # applies on every restart; with state_dir only when the job has no saved
+    # state yet: delete its state file to backfill again
     backfill: 0
 
     # Attach images passed to `embed` as files instead of linking them

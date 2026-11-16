@@ -146,6 +146,9 @@ func SetupJobs(ctx context.Context, c *config.FeedrrrConfig, jobSinks *map[strin
 		if state.load(rssJob) {
 			restored++
 			close(ready)
+			if cfg.Backfill > 0 {
+				logger.Warn("backfill applies when a job is seeded, delete its saved state to backfill again", "path", state.path)
+			}
 		} else {
 			inits = append(inits, func() bool {
 				defer close(ready)
@@ -159,6 +162,14 @@ func SetupJobs(ctx context.Context, c *config.FeedrrrConfig, jobSinks *map[strin
 				}
 				logger.Info("Initial fetch done, feed seeded without sending", "took", time.Since(start).Round(time.Millisecond))
 				state.save(rssJob)
+				// send the backfill now instead of at the first scheduled run;
+				// ready is still open, so that run can't send them twice
+				if cfg.Backfill > 0 {
+					if err := rssJob.RetrieveAndSendNewItems(ctx); err != nil {
+						logger.Warn("Backfill not fully sent, will retry next run", "err", err)
+					}
+					state.save(rssJob)
+				}
 				return true
 			})
 		}
